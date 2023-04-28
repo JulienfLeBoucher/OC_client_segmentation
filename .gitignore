@@ -1,2 +1,5 @@
 /csv_files/*
 ideas.md
+questions.md
+*.gz
+*pyc
