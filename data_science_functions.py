@@ -14,11 +14,12 @@ from sklearn.metrics import silhouette_samples
 from sklearn.metrics import silhouette_score
 
 from scipy.stats import pearsonr
+from scipy.cluster.hierarchy import dendrogram
 
 import xgboost as xgb
   
 # NUMERICAL/NUMERICAL Analysis
-def display_correlation_matrix(data, features=None):
+def display_correlation_matrix(data, features=None, figsize=(11,9)):
     """Display the correlation matrix enlighten with a heatmap
 
     'features' : enable features restriction.
@@ -33,14 +34,15 @@ def display_correlation_matrix(data, features=None):
 
     if num_data.isnull().sum().sum() != 0:
         problem_message = (
-            "PROBLEM : there is at least one null value in" + "the data provided"
+            "PROBLEM : there is at least one null value in" 
+            + "the data provided"
         )
         print(problem_message)
     else:
         corr = num_data.corr()
         # Generate a mask for the upper triangle
         mask = np.triu(np.ones_like(corr, dtype=bool))
-        f, ax = plt.subplots(figsize=(11, 9))
+        f, ax = plt.subplots(figsize=figsize)
         cmap = sns.diverging_palette(230, 20, as_cmap=True)
         sns.heatmap(
             corr.round(2),
@@ -269,7 +271,9 @@ def display_correlation_circle(
 
 
 def display_factorial_plane_projection(
-    Xt, pca, axis_ranks, labels=None, alpha=1, illustrative_var=None, figsize=(6, 6)
+    Xt, pca, axis_ranks, labels=None, alpha=1, ax=None,
+    illustrative_var=None, figsize=(6, 6), title_size=20,
+    palette=None,
 ):
     """Display the projection of points in a factorial plane.
 
@@ -282,23 +286,34 @@ def display_factorial_plane_projection(
     """
     n_comp = pca.n_components_
     d1, d2 = axis_ranks
+    
+    # Boolean used to plt.show() at the end of the function
+    # if ax is not provided
+    final_plot = False
+    ##
 
     if d2 < n_comp:
-        fig = plt.figure(figsize=figsize)
+        if ax is None:
+            fig, ax = plt.figure(figsize=figsize)
+            final_plot = True
         # Display the points
         if illustrative_var is None:
-            plt.scatter(Xt[:, d1], Xt[:, d2], alpha=alpha, s=10)
+            ax.scatter(Xt[:, d1], Xt[:, d2], alpha=alpha, s=10)
         else:
             illustrative_var = np.array(illustrative_var)
             illustrative_values = np.unique(illustrative_var)
-            palette = sns.color_palette("tab10", len(illustrative_values))
+            n_val = len(illustrative_values)
+            if palette is None:
+                palette = sns.color_palette("tab10", n_val)
+            # Plot reversely to see most frequent on top.
             for n, value in enumerate(illustrative_values[::-1]):
                 selected = np.where(illustrative_var == value)
-                plt.scatter(
+                ax.scatter(
                     Xt[selected, d1], Xt[selected, d2],
-                    alpha=alpha, label=value, color=palette[n], s=10
+                    alpha=alpha, label=value, color=palette[n_val - 1 - n],
+                    s=10
                 )
-            plt.legend(bbox_to_anchor=(1.05, 1),
+            ax.legend(bbox_to_anchor=(1.05, 1),
                        loc='upper left',
                        borderaxespad=0.,
                        fontsize=10)
@@ -306,29 +321,33 @@ def display_factorial_plane_projection(
         # Display the labels on the points
         if labels is not None:
             for i, (x, y) in enumerate(Xt[:, [d1, d2]]):
-                plt.text(x, y, labels[i], fontsize="14", ha="center", va="center")
+                ax.text(x, y, labels[i], fontsize="14", ha="center", va="center")
 
         # Define the limits of the chart
         xmin = np.min(Xt[:, [d1]]) * 1.1
         xmax = np.max(Xt[:, [d1]]) * 1.1
         ymin = np.min(Xt[:, [d2]]) * 1.1
         ymax = np.max(Xt[:, [d2]]) * 1.1
-        plt.xlim([xmin, xmax])
-        plt.ylim([ymin, ymax])
+        ax.set_xlim([xmin, xmax])
+        ax.set_ylim([ymin, ymax])
 
         # Display grid lines
-        plt.plot([-100, 100], [0, 0], color="grey", ls="--")
-        plt.plot([0, 0], [-100, 100], color="grey", ls="--")
+        ax.plot([-100, 100], [0, 0], color="grey", ls="--")
+        ax.plot([0, 0], [-100, 100], color="grey", ls="--")
 
         # Label the axes, with the percentage of variance explained
         pct_var_d1 = round(100 * pca.explained_variance_ratio_[d1], 1)
         pct_var_d2 = round(100 * pca.explained_variance_ratio_[d2], 1)
-        plt.xlabel("PC{} ({}%)".format(d1 + 1, pct_var_d1), size=18)
-        plt.ylabel("PC{} ({}%)".format(d2 + 1, pct_var_d2), size=18)
+        ax.set_xlabel("PC{} ({}%)".format(d1 + 1, pct_var_d1), size=18)
+        ax.set_ylabel("PC{} ({}%)".format(d2 + 1, pct_var_d2), size=18)
         # Add title
-        plt.title(f"Projection of points on PC{d1+1} and PC{d2+1}", size=22)
-        # plt.show(block=False)
-        plt.show()
+        ax.set_title(
+            f"Projection of points on PC{d1+1} and PC{d2+1}",
+            size=title_size
+        )
+        # ax.show(block=False)
+        if final_plot:
+            plt.show()
     return None
 
 
@@ -551,128 +570,180 @@ def my_pairplot(data):
     plt.show()
     
     
-### KMeans
-def display_silhouette_summary(X, clusterer, xlim_silhouette=(-1,1)):
-    """ Strongly inspired from sklearn
-    https://scikit-learn.org/stable/auto_examples/cluster/plot_kmeans_silhouette_analysis.html#sphx-glr-auto-examples-cluster-plot-kmeans-silhouette-analysis-py
+### Clustering
+def plot_dendrogram(model, **kwargs):
+    """ Create linkage matrix and then plot the dendrogram """
+    # create the counts of samples under each node
+    counts = np.zeros(model.children_.shape[0])
+    n_samples = len(model.labels_)
+    for i, merge in enumerate(model.children_):
+        current_count = 0
+        for child_idx in merge:
+            if child_idx < n_samples:
+                current_count += 1  # leaf node
+            else:
+                current_count += counts[child_idx - n_samples]
+        counts[i] = current_count
+
+    linkage_matrix = np.column_stack(
+        [model.children_, model.distances_, counts]
+    ).astype(float)
     
-    X has to be pre-processed.
+    # Plot the corresponding dendrogram
+    dendrogram(linkage_matrix, **kwargs)
+    return None
+
+# import matplotlib.colors as col
+# colors = {0: (0.6, 0.8, 0.8, 1), 1: (1, 0.9, 0.4, 1)}
+
+# c = {k:col.rgb2hex(v) for k, v in colors.items()}
+# idx = df.index.get_level_values(0)
+
+# css = [{'selector': f'.row{i}.level0','props': [('background-color', c[v])]}
+#              for i,v in enumerate(idx)]
+
+def cluster_comp_prettier(styler):
+    styler.set_caption("The table is to be read by row (feature). "
+                       "For a feature, Clusters with higher values"
+                       " are displayed with light colors.")
+    styler.format(precision=2, thousands=" ")
+    # styler.set_table_styles(css)
+    styler.background_gradient(axis=1, cmap='viridis')  
+    return styler
+
+def display_clusters_in_pca_space_and_tsne_embedding(
+    X_proj, pca, X_tsne, label_vec, label_name
+):
+    """ display the cluster projections on the 2 first factorial planes
+    and display the t-SNE embedded clusters.
+    
+    X_proj and X_tsne are ndarrays of the same length.
+    
     """
-    # Compute labels with the clusterer
-    cluster_labels = clusterer.fit_predict(X)
-    # Features after the preprocessing step of the clusterer.
-    n_clusters = cluster_labels.max() + 1
+    palette = sns.color_palette('tab10', n_colors=label_vec.nunique())
     
-    # The silhouette_score gives the average value for all the samples.
-    # This gives a perspective into the density and separation of the formed
-    # clusters
-    silhouette_avg = silhouette_score(X, cluster_labels)
-    
-    print(
-    "For n_clusters =",
-    n_clusters,
-    "The average silhouette_score is :",
-    silhouette_avg,
+    fig, ax = plt.subplots(1,3, figsize=(15,5))
+
+    display_factorial_plane_projection(
+            X_proj, pca, (0, 1),
+            ax=ax[0],
+            title_size=16,
+            illustrative_var=label_vec,
+            palette=palette
     )
     
-    # Compute the silhouette scores for each sample
-    sample_silhouette_values = silhouette_samples(X, cluster_labels)
+    display_factorial_plane_projection(
+        X_proj, pca, (1, 2),
+        ax=ax[1],
+        title_size=16,
+        illustrative_var=label_vec,
+        palette=palette
+    )
     
-    # Plotting the ordered silhouette values within each cluster
-    # And the silhouette mean on the overall dataset as a
-    # red dotted line.    
-    fig, ax = plt.subplots(figsize=(6,6))
-    # The silhouette coefficient can range from -1, 1 but this can be
-    # changed to improve the visualization. 
-    ax.set_xlim([*xlim_silhouette])
-    # The (n_clusters+1)*10 is for inserting blank space between silhouette
-    # plots of individual clusters, to demarcate them clearly.
-    ax.set_ylim([0, len(X) + (n_clusters + 1) * 10])
-
-    y_lower = 10
-    for i in range(n_clusters):
-        # Aggregate the silhouette scores for samples belonging to
-        # cluster i, and sort them
-        ith_cluster_silhouette_values = (
-            sample_silhouette_values[cluster_labels == i]
+    for n, label in enumerate(np.sort(label_vec.unique())):
+        sel = np.where(label_vec == label)
+        ax[2].scatter(
+            X_tsne[sel, 0], X_tsne[sel, 1], 
+            s=15, color=palette[n], marker='o', label=label
         )
-        ith_cluster_silhouette_values.sort()
-        size_cluster_i = ith_cluster_silhouette_values.shape[0]
-        y_upper = y_lower + size_cluster_i
+        
+    ax[2].set_title(f't-SNE colored by {label_name}', size=16)
+    ax[2].axis('off')
+    ax[2].set_xticks([])
+    ax[2].set_yticks([])
+    ax[2].legend(bbox_to_anchor=(1.05, 0.75))
+    fig.tight_layout()
+    plt.show()
+    return None
+    
+def display_clusters_comparison(
+    X, cluster_labels, showfliers=False, layout=(1,3), figsize=(15, 5)
+):
+    """ For each feature of X :
+        1) Plot a describe table of clusters.
+        2) Plot side-by-side boxplots of each cluster.
+        
+        Also plot the effectives of each cluster.
+        
 
-        color = cm.nipy_spectral(float(i) / n_clusters)
-        ax.fill_betweenx(
-            np.arange(y_lower, y_upper),
-            0,
-            ith_cluster_silhouette_values,
-            facecolor=color,
-            edgecolor=color,
-            alpha=0.7,
+    Args:
+        X (pd.DataFrame): Dataframe restricted to the features of interest.
+        cluster_labels (pd.Series): Series containing the label of the cluster.
+
+    Returns:
+        None
+    """
+    # Check if the layout is consistent with the number of features
+    n_rows, n_cols = layout
+    if n_rows * n_cols != X.shape[1]:
+        print("layout does not match the number of features in X")
+    
+    X['cluster_label'] = cluster_labels
+    
+    # The summary table 
+    table = (X.groupby('cluster_label')
+            .agg(['mean', 'std', 'min', 'max'])
+            .T)
+    display(table.style.pipe(cluster_comp_prettier))
+    
+    # Boxplots  
+    fig, axs = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=figsize)
+    # fliers props
+    flierprops = dict(marker='x',
+                      markersize=8,
+                      alpha=0.1)
+    
+    for ax, ft in zip(axs.flat, X.columns):
+        sns.boxplot(y="cluster_label", x=ft, data=X,
+                    ax=ax, showfliers=showfliers, orient='h',
+                    flierprops=flierprops,
+                    width=0.4)
+        ax.xaxis.label.set_size(16)
+    plt.suptitle(f'{cluster_labels.name}')
+    plt.tight_layout()
+    plt.show()
+    
+    # The effectives
+    width = 0.3
+    fig, ax = plt.subplots(figsize=(5, (X.shape[1] + 1)/2))
+    sns.countplot(data=X, y='cluster_label',
+                  ax=ax, width=width)    
+    total = len(X)
+    xs = []
+    ys = []
+    pcts = []
+    cols = []    
+    for p in ax.patches:
+        pcts.append(f'{100 * p.get_width() / total:.1f}%\n')
+        xs.append(p.get_width())
+        ys.append(p.get_y())
+        cols.append(p.get_facecolor())
+        
+    for col, pct, x, y in zip(cols, pcts, xs, ys):    
+        ax.annotate(
+            pct,
+            (x + 0.01 * max(xs) , y),
+            color=col, ha='left', va='top', size=10
         )
-
-        # Label the silhouette plots with their cluster numbers at
-        # the middle
-        ax.text(-0.05, y_lower + 0.5 * size_cluster_i, str(i))
-
-        # Compute the new y_lower for next plot
-        y_lower = y_upper + 10  # 10 for the 0 samples
-
-    ax.set_title("The silhouette plot for the various clusters.")
-    ax.set_xlabel("The silhouette coefficient values")
-    ax.set_ylabel("Cluster label")
-
-    # The vertical line for average silhouette score of all the
-    # values
-    ax.axvline(x=silhouette_avg, color="red", linestyle="--")
-
-    ax.set_yticks([])  # Clear the yaxis labels / ticks
-    ax.set_xticks(np.arange(*xlim_silhouette, 0.2))
-
-    
-
-    
-    
-
-
-
-
-
-
-    # 2nd Plot showing the actual clusters formed
-    colors = cm.nipy_spectral(
-        cluster_labels.astype(float) / n_clusters
-    )
-    ax2.scatter(
-        X[:, 0], X[:, 1],
-        marker=".", s=30, lw=0, alpha=0.7, c=colors, edgecolor="k"
-    )
-
-    # Labeling the clusters
-    centers = clusterer.cluster_centers_
-    # Draw white circles at cluster centers
-    ax2.scatter(
-        centers[:, 0],
-        centers[:, 1],
-        marker="o",
-        c="white",
-        alpha=1,
-        s=200,
-        edgecolor="k",
-    )
-
-    for i, c in enumerate(centers):
-        ax2.scatter(c[0], c[1], marker="$%d$" % i, alpha=1, s=50, edgecolor="k")
-
-    ax2.set_title("The visualization of the clustered data.")
-    ax2.set_xlabel("Feature space for the 1st feature")
-    ax2.set_ylabel("Feature space for the 2nd feature")
-
-    plt.suptitle(
-        "Silhouette analysis for KMeans clustering on sample data with n_clusters = %d"
-        % n_clusters,
-        fontsize=14,
-        fontweight="bold",
-    )
+    ax.set_xlim(0, max(xs) *1.05)
+    ax.set_ylabel('Cluster labels', fontsize=12)
+    ax.set_xlabel('')
+    plt.title("Clusters' effectives", fontsize=18)
+    plt.tight_layout()
 
     plt.show()
-        
+    return None
+
+### helper functions
+def arguments():
+        """Returns a tuple containing :
+           - a dictionary of the calling function's
+           named arguments, and ;
+           - a list of calling function's unnamed
+           positional arguments.
+        """
+        from inspect import getargvalues, stack
+        posname, kwname, args = getargvalues(stack()[1][0])[-3:]
+        posargs = args.pop(posname, [])
+        args.update(args.pop(kwname, []))
+        return args, posargs
