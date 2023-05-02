@@ -294,7 +294,7 @@ def display_factorial_plane_projection(
 
     if d2 < n_comp:
         if ax is None:
-            fig, ax = plt.figure(figsize=figsize)
+            fig, ax = plt.subplots(figsize=figsize)
             final_plot = True
         # Display the points
         if illustrative_var is None:
@@ -602,7 +602,7 @@ def plot_dendrogram(model, **kwargs):
 # css = [{'selector': f'.row{i}.level0','props': [('background-color', c[v])]}
 #              for i,v in enumerate(idx)]
 
-def cluster_comp_prettier(styler):
+def cluster_table_prettier(styler):
     styler.set_caption("The table is to be read by row (feature). "
                        "For a feature, Clusters with higher values"
                        " are displayed with light colors.")
@@ -610,6 +610,7 @@ def cluster_comp_prettier(styler):
     # styler.set_table_styles(css)
     styler.background_gradient(axis=1, cmap='viridis')  
     return styler
+
 
 def display_clusters_in_pca_space_and_tsne_embedding(
     X_proj, pca, X_tsne, label_vec, label_name
@@ -620,7 +621,7 @@ def display_clusters_in_pca_space_and_tsne_embedding(
     X_proj and X_tsne are ndarrays of the same length.
     
     """
-    palette = sns.color_palette('tab10', n_colors=label_vec.nunique())
+    palette = sns.color_palette()
     
     fig, ax = plt.subplots(1,3, figsize=(15,5))
 
@@ -655,38 +656,25 @@ def display_clusters_in_pca_space_and_tsne_embedding(
     fig.tight_layout()
     plt.show()
     return None
-    
-def display_clusters_comparison(
-    X, cluster_labels, showfliers=False, layout=(1,3), figsize=(15, 5)
-):
-    """ For each feature of X :
-        1) Plot a describe table of clusters.
-        2) Plot side-by-side boxplots of each cluster.
-        
-        Also plot the effectives of each cluster.
-        
 
-    Args:
-        X (pd.DataFrame): Dataframe restricted to the features of interest.
-        cluster_labels (pd.Series): Series containing the label of the cluster.
 
-    Returns:
-        None
-    """
-    # Check if the layout is consistent with the number of features
-    n_rows, n_cols = layout
-    if n_rows * n_cols != X.shape[1]:
-        print("layout does not match the number of features in X")
-    
-    X['cluster_label'] = cluster_labels
-    
-    # The summary table 
-    table = (X.groupby('cluster_label')
+def display_clusters_summary_table(X, label_name):
+    """ X is a dataframe with all the features and a label_name column. """
+    table = (X.groupby(label_name)
             .agg(['mean', 'std', 'min', 'max'])
             .T)
-    display(table.style.pipe(cluster_comp_prettier))
+    display(table.style.pipe(cluster_table_prettier))
+    return None
+
+
+def display_features_boxplot_per_cluster(
+    X, label_name, layout=(1, 3), figsize=(15, 7), showfliers=False, 
+):
+    """ X is a dataframe with all the features and a label_name column. """
+    n_rows, n_cols = layout
+    if n_rows * n_cols <= X.shape[1]:
+        print("layout is not sufficient to display all the features in X")
     
-    # Boxplots  
     fig, axs = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=figsize)
     # fliers props
     flierprops = dict(marker='x',
@@ -694,19 +682,23 @@ def display_clusters_comparison(
                       alpha=0.1)
     
     for ax, ft in zip(axs.flat, X.columns):
-        sns.boxplot(y="cluster_label", x=ft, data=X,
+        sns.boxplot(y=label_name, x=ft, data=X,
                     ax=ax, showfliers=showfliers, orient='h',
                     flierprops=flierprops,
                     width=0.4)
         ax.xaxis.label.set_size(16)
-    plt.suptitle(f'{cluster_labels.name}')
+    plt.suptitle(f'{label_name}')
     plt.tight_layout()
     plt.show()
+    return None
     
-    # The effectives
+    
+def display_clusters_effectives_and_percentages(X, label_name):
+    """ X is a dataframe with all the features and a label_name column. """
     width = 0.3
-    fig, ax = plt.subplots(figsize=(5, (X.shape[1] + 1)/2))
-    sns.countplot(data=X, y='cluster_label',
+    ysize = max(X[label_name].nunique() / 2, 3)
+    fig, ax = plt.subplots(figsize=(5, ysize))
+    sns.countplot(data=X, y=label_name,
                   ax=ax, width=width)    
     total = len(X)
     xs = []
@@ -730,8 +722,39 @@ def display_clusters_comparison(
     ax.set_xlabel('')
     plt.title("Clusters' effectives", fontsize=18)
     plt.tight_layout()
-
     plt.show()
+    return None
+    
+    
+def display_clusters_comparison(
+    X, label_name, layout=(1,3), figsize=(15, 5), showfliers=False
+):
+    """ For each feature of X :
+        1) Plot a table summing the information of clusters.
+        2) Plot side-by-side boxplots per cluster for each feature.
+        3) Plot effectives and percentages of each clusters.
+        
+    Args:
+        X (pd.DataFrame): Dataframe restricted to the features of
+        interest plus the label column.
+        label_name (str): the label column name.
+
+    Returns:
+        None
+    """
+    # Check if the layout is consistent with the number of features
+
+    
+    # The summary table 
+    display_clusters_summary_table(X, label_name)
+    
+    # Boxplots  
+    display_features_boxplot_per_cluster(X, label_name,
+                                 layout=layout, figsize=figsize,
+                                 showfliers=showfliers)
+    
+    # The effectives
+    display_clusters_effectives_and_percentages(X, label_name)
     return None
 
 ### helper functions
