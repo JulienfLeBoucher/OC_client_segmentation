@@ -17,6 +17,8 @@ from scipy.stats import pearsonr
 from scipy.cluster.hierarchy import dendrogram
 
 import xgboost as xgb
+
+import colorcet as cc
   
 # NUMERICAL/NUMERICAL Analysis
 def display_correlation_matrix(data, features=None, figsize=(11,9)):
@@ -571,6 +573,9 @@ def my_pairplot(data):
     
     
 ### Clustering
+pal = sns.color_palette(cc.glasbey, n_colors=25)
+
+
 def plot_dendrogram(model, **kwargs):
     """ Create linkage matrix and then plot the dendrogram """
     # create the counts of samples under each node
@@ -593,14 +598,6 @@ def plot_dendrogram(model, **kwargs):
     dendrogram(linkage_matrix, **kwargs)
     return None
 
-# import matplotlib.colors as col
-# colors = {0: (0.6, 0.8, 0.8, 1), 1: (1, 0.9, 0.4, 1)}
-
-# c = {k:col.rgb2hex(v) for k, v in colors.items()}
-# idx = df.index.get_level_values(0)
-
-# css = [{'selector': f'.row{i}.level0','props': [('background-color', c[v])]}
-#              for i,v in enumerate(idx)]
 
 def cluster_table_prettier(styler):
     styler.set_caption("The table is to be read by row (feature). "
@@ -612,26 +609,53 @@ def cluster_table_prettier(styler):
     return styler
 
 
+def add_centroids_display_in_a_plan(centroids, ax, selected_coordinates):
+    """
+    - Add display of centroids to a matplotlib axis ax.
+    
+    'selected_coordinates' is a t-uple which indicates the rank of the 
+    2 coordinates to extract from the p-coordinates in the p-dim space where
+    centroids are expressed.
+    """
+    nx, ny = selected_coordinates
+    centroids_xs = []
+    centroids_ys = []
+    for k in range(len(centroids)):
+        centroids_xs.append(centroids[k][nx]) 
+        centroids_ys.append(centroids[k][ny]) 
+    return ax.scatter(centroids_xs, centroids_ys, marker='x', s=40, c='k')
+    
+
+
 def display_clusters_in_pca_space_and_tsne_embedding(
-    X_proj, pca, X_tsne, label_vec, label_name
+    X_proj, pca, X_tsne, label_vec, label_name, palette=pal,
+    centroids=None
 ):
-    """ display the cluster projections on the 2 first factorial planes
+    """ 
+    - display the cluster projections on the 2 first factorial planes
     and display the t-SNE embedded clusters.
+    - project centroids in pca space and add its display when available.
     
     X_proj and X_tsne are ndarrays of the same length.
     
     """
-    palette = sns.color_palette()
+    if centroids is not None:
+        pca_centroids = pca.transform(centroids)
     
     fig, ax = plt.subplots(1,3, figsize=(15,5))
 
     display_factorial_plane_projection(
-            X_proj, pca, (0, 1),
-            ax=ax[0],
-            title_size=16,
-            illustrative_var=label_vec,
-            palette=palette
+        X_proj, pca, (0, 1),
+        ax=ax[0],
+        title_size=16,
+        illustrative_var=label_vec,
+        palette=palette
     )
+    if centroids is not None:
+        add_centroids_display_in_a_plan(
+            pca_centroids, ax[0], (0,1)
+        )
+    
     
     display_factorial_plane_projection(
         X_proj, pca, (1, 2),
@@ -640,6 +664,11 @@ def display_clusters_in_pca_space_and_tsne_embedding(
         illustrative_var=label_vec,
         palette=palette
     )
+    if centroids is not None:
+        add_centroids_display_in_a_plan(
+            pca_centroids, ax[1], (1,2)
+        )
+
     
     for n, label in enumerate(np.sort(label_vec.unique())):
         sel = np.where(label_vec == label)
@@ -668,37 +697,41 @@ def display_clusters_summary_table(X, label_name):
 
 
 def display_features_boxplot_per_cluster(
-    X, label_name, layout=(1, 3), figsize=(15, 7), showfliers=False, 
+    X, label_name, layout=(1, 3),
+    showfliers=False, palette=pal
 ):
     """ X is a dataframe with all the features and a label_name column. """
+    # fig structure
     n_rows, n_cols = layout
-    if n_rows * n_cols <= X.shape[1]:
-        print("layout is not sufficient to display all the features in X")
-    
-    fig, axs = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=figsize)
+    height = max(3, X[label_name].nunique()/3)
+    fig, axs = plt.subplots(nrows=n_rows, ncols=n_cols,
+                            figsize=(n_cols * 5, n_rows * height))
     # fliers props
     flierprops = dict(marker='x',
                       markersize=8,
-                      alpha=0.1)
+                      alpha=0.1,)
     
     for ax, ft in zip(axs.flat, X.columns):
         sns.boxplot(y=label_name, x=ft, data=X,
                     ax=ax, showfliers=showfliers, orient='h',
+                    whis=[1,99],
                     flierprops=flierprops,
+                    palette=palette,
                     width=0.4)
         ax.xaxis.label.set_size(16)
-    plt.suptitle(f'{label_name}')
+    plt.suptitle(f'{label_name} : whisker percentiles (1 ; 99)', y=1.01)
     plt.tight_layout()
     plt.show()
     return None
     
     
-def display_clusters_effectives_and_percentages(X, label_name):
+def display_clusters_effectives_and_percentages(X, label_name, palette=pal):
     """ X is a dataframe with all the features and a label_name column. """
     width = 0.3
     ysize = max(X[label_name].nunique() / 2, 3)
     fig, ax = plt.subplots(figsize=(5, ysize))
     sns.countplot(data=X, y=label_name,
+                  palette=palette,
                   ax=ax, width=width)    
     total = len(X)
     xs = []
@@ -727,7 +760,7 @@ def display_clusters_effectives_and_percentages(X, label_name):
     
     
 def display_clusters_comparison(
-    X, label_name, layout=(1,3), figsize=(15, 5), showfliers=False
+    X, label_name, layout=(1,3), showfliers=False,
 ):
     """ For each feature of X :
         1) Plot a table summing the information of clusters.
@@ -742,16 +775,13 @@ def display_clusters_comparison(
     Returns:
         None
     """
-    # Check if the layout is consistent with the number of features
-
-    
     # The summary table 
     display_clusters_summary_table(X, label_name)
     
     # Boxplots  
     display_features_boxplot_per_cluster(X, label_name,
-                                 layout=layout, figsize=figsize,
-                                 showfliers=showfliers)
+                                         layout=layout, 
+                                         showfliers=showfliers)
     
     # The effectives
     display_clusters_effectives_and_percentages(X, label_name)

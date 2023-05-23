@@ -1,5 +1,10 @@
 import pandas as pd
 import numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import FunctionTransformer
+from sklearn.pipeline import make_pipeline
+from sklearn.compose import make_column_transformer
+
 
 ### EDA TOOLS
 def make_summary(datasets):
@@ -183,6 +188,42 @@ def map_to_larger_categories(elem):
     else:
         return elem
 
+
+def map_to_main_categories(elem):
+    """ Function for mapping product categories to main ones. """
+    if elem in ['office_furniture',
+                'home_comfort_2',
+                'la_cuisine',
+                'furniture_mattress_and_upholstery',
+                'furniture_bedroom',
+                'furniture_living_room',
+                'fixed_telephony',
+                'home_appliances',
+                'small_appliances_home_oven_and_coffee',
+                'home_appliances_2',
+                'kitchen_dining_laundry_garden_furniture',
+                'bed_bath_table',
+                'furniture_decor',
+                'home_confort',
+                'housewares',
+                'fixed_telephony']:
+        return "home"
+    
+    elif elem in ['perfumery',
+                  'health_beauty',]:
+        return "health_and_beauty"
+    
+    elif elem in ['computers',
+                  'tablets_printing_image',
+                  'electronics',
+                  'consoles_games',
+                  'telephony',
+                  'computers_accessories',
+                  'small_appliances',]:
+        return "electronics_and_multimedia"
+    
+    else:
+        return "other"
 ### Features engineering
 # def client_orders_summary(client_info):
 #     """ Return a df with one line per order made by the client. Works if
@@ -588,11 +629,48 @@ def clients_summary_post_processing(clients, threshold_old_clients = 90):
     clients = clients.copy()
     clients = add_clients_dynamic_ratios(clients)
     clients = add_clients_payment_type_and_payment_per_category_ratios(clients)
-    # TODO : add any corrections made in the EDA notebook at the end
+    # Cap value at 10
+    clients.loc[clients.value_ratio_p2_p1 > 10, 'value_ratio_p2_p1'] = 10
+    
+    # Addressing high and inf values of ratios which should not exceed 1.
+    ratios_cols = [
+        'ratio_value_sports_leisure', 'ratio_value_electronics_and_multimedia',
+        'ratio_value_unknown', 'ratio_value_toys', 'ratio_value_auto',
+        'ratio_value_tools_and_professional_material',
+        'ratio_value_health_and_beauty', 'ratio_value_pet_shop',
+        'ratio_value_baby', 'ratio_value_watches_gifts',
+        'ratio_value_art_cinema_music', 'ratio_value_stationery',
+        'ratio_value_fashion', 'ratio_value_other', 'ratio_value_books',
+        'ratio_value_security', 'ratio_freight_value',
+        'ratio_payment_value_credit_card', 'ratio_payment_value_debit_card',
+        'ratio_payment_value_voucher', 'ratio_payment_value_boleto',
+        'ratio_payment_value_not_defined']
+    ratios = clients.loc[:, ratios_cols]
+    ratios[ratios >= 1] = 1
+    clients.loc[:, ratios_cols] = ratios
+    
+    # Simplify categories
+    clients['new_ratio_value_other'] = (
+        clients.ratio_value_other
+        + clients.ratio_value_art_cinema_music
+        + clients.ratio_value_auto
+        + clients.ratio_value_baby
+        + clients.ratio_value_books
+        + clients.ratio_value_fashion
+        + clients.ratio_value_pet_shop
+        + clients.ratio_value_security
+        + clients.ratio_value_sports_leisure
+        + clients.ratio_value_stationery
+        + clients.ratio_value_tools_and_professional_material
+        + clients.ratio_value_toys
+        + clients.ratio_value_watches_gifts
+        + clients.ratio_value_unknown
+    ) 
+
     return clients
 
 
-def make_clients_summary_relative_to_a_date(orders_df, date):
+def make_clients_summary_relative_to_a_date_for_clustering(orders_df, date):
     """ Enable to simulate the client summary relatively to a certain
     date from the global orders summary df (not post-processed)."""
     ### Check
@@ -610,8 +688,82 @@ def make_clients_summary_relative_to_a_date(orders_df, date):
     # examination which is 'date'.
     df = orders_summary_additions_relative_to_a_date(df, date)
     # Compute the clients' summary
-    return make_clients_summary(df) 
+    clients = make_clients_summary(df) 
+    
+    # Select what is needed for clustering
+    fts = ['monetary_value_sum', 'days_delivery_mean',
+           'total_number_of_purchases', 'value_ratio_p2_p1', 
+           'days_last_purchase', 'review_score_mean',
+           'ratio_value_home', 'ratio_value_electronics_and_multimedia',
+           'ratio_value_health_and_beauty', 'new_ratio_value_other',
+           'ratio_freight_value', 'ratio_payment_value_credit_card',
+           'ratio_payment_value_boleto']
+    
+    clients = clients.loc[:, fts]
+    clients = clients.dropna(axis=0)
+    return clients
 
+
+### CLUSTERING PRE-PROCESSING for the retained model ###
+def clustering_preprocessing(X: pd.DataFrame)-> pd.DataFrame:
+    """ Return pre-processed features.
+    
+    Can take any clients summary as parameter X as long as it 
+    possesses the features listed below.
+    
+    If more features are provide, it will automatically 
+    filter them."""
+    fts_to_logscale = ['monetary_value_sum',
+                       'days_delivery_mean',] 
+
+    fts_to_log_only = ['total_number_of_purchases', 
+                       'value_ratio_p2_p1', ]                  
+        
+    fts_to_scale_only = ['days_last_purchase',
+                         'review_score_mean',]
+
+    fts_passthrough = ['ratio_value_home',
+                       'ratio_value_electronics_and_multimedia',
+                       'ratio_value_health_and_beauty',
+                       'new_ratio_value_other',
+                       'ratio_freight_value',
+                       'ratio_payment_value_credit_card',
+                       'ratio_payment_value_boleto',]
+
+    all_fts = [*fts_to_logscale,
+               *fts_to_log_only,
+               *fts_to_scale_only,
+               *fts_passthrough]
+
+    log_transformer = FunctionTransformer(func=np.log1p)
+
+    pre_processor = make_column_transformer(
+        (make_pipeline(log_transformer, StandardScaler()), fts_to_logscale),
+        (log_transformer, fts_to_log_only),
+        (StandardScaler(), fts_to_scale_only),
+        ('passthrough', fts_passthrough),
+    )
+    
+    # print('PRE-PROCESSING')
+    # print(f'X shape :{X.shape}')
+    Xpp = pre_processor.fit_transform(X)
+    Xpp = pd.DataFrame(Xpp,
+                       index=X.index,
+                       columns=[fts + '_pp' for fts in all_fts])
+    # print(f'Xpp shape :{Xpp.shape}')
+
+    # # Plotting distributions
+    # fig, axs = plt.subplots(ncols=2, nrows=X.shape[1], figsize=(8, 13*4))
+    # for n, ax in enumerate(axs):
+    #     X_col = X.iloc[:, n]
+    #     Xpp_col = Xpp.iloc[:, n]
+    #     ax[0].hist(X_col, bins=100, log=True)
+    #     ax[0].set_title(f'{X_col.name} distribution')
+    #     ax[1].hist(Xpp_col, bins=100, log=True)
+    #     ax[1].set_title(f'{Xpp_col.name} distribution')
+    # plt.tight_layout()
+    # plt.show()  
+    return Xpp  
     
     
 

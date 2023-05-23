@@ -3,3 +3,10 @@ ideas.md
 questions.md
 *.gz
 *pyc
+*.odt
+*.zip
+Segmentez*/*
+*.pdf
+!presentations/presentation.pdf
+presentations/*.pptx
+.ipynb*
